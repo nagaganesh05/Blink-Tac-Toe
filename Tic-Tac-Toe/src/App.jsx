@@ -1,11 +1,15 @@
+
 import React, { useEffect, useCallback, useReducer, useMemo } from 'react';
-import Board from './Components/Board';
+import Board from './Components/Board'; 
 import PlayerPanel from './Components/PlayerPanel';
 import GameInfo from './Components/GameInfo';
 import PreGameSetup from './Components/PreGameSetup';
 import HelpModal from './Components/HelpModal';
+import GameModeSelector from './Components/GameModeSelector';
 import { gameReducer, initialState, EMOJI_CATEGORIES } from './gameReducer';
-import { getWinningLines, getRandomEmoji } from './utils/gameHelpers';
+import { getWinningLines, getRandomEmoji, checkWin } from './utils/gameHelpers';
+import { getAiMove } from './utils/aiLogic';
+import classNames from 'classnames'; 
 
 function App() {
   const [gameState, dispatch] = useReducer(gameReducer, initialState);
@@ -24,46 +28,88 @@ function App() {
     player1Score,
     player2Score,
     message,
+    gameMode,
+    isAiTurn,
   } = gameState;
 
-  // Memoize winning lines as they are constant and don't change
   const WINNING_LINES = useMemo(() => getWinningLines(), []);
 
-  // Effect to check for a winner after each move
   useEffect(() => {
-    if (winner || !gameStarted) return; // No need to check if already won or game not started
+    if (winner || !gameStarted) return;
 
-    // Only check for win if current player has at least 3 emojis on the board
-    const activeEmojisCount = currentPlayer === 1 ? player1ActiveEmojis.length : player2ActiveEmojis.length;
-    if (activeEmojisCount < 3) return;
+    const lastPlayer = currentPlayer === 1 ? 2 : 1;
+    const lastPlayerActiveEmojis = lastPlayer === 1 ? player1ActiveEmojis : player2ActiveEmojis;
 
-    for (let i = 0; i < WINNING_LINES.length; i++) {
-      const [a, b, c] = WINNING_LINES[i];
-      const cellA = board[a];
-      const cellB = board[b];
-      const cellC = board[c];
-
-      // Check if all three cells in a line are occupied by the current player
-      if (
-        cellA && cellB && cellC &&
-        cellA.player === currentPlayer &&
-        cellB.player === currentPlayer &&
-        cellC.player === currentPlayer
-      ) {
-        dispatch({ type: 'SET_WINNER', payload: { player: currentPlayer, line: WINNING_LINES[i] } });
-        return; // Found a winner, stop checking
+    
+    if (lastPlayerActiveEmojis.length >= 3) {
+      const foundWinningLine = checkWin(board, lastPlayer, WINNING_LINES);
+      if (foundWinningLine) {
+        dispatch({ type: 'SET_WINNER', payload: { player: lastPlayer, line: foundWinningLine } });
+        return;
       }
     }
   }, [board, currentPlayer, winner, gameStarted, player1ActiveEmojis, player2ActiveEmojis, WINNING_LINES]);
 
 
-  // Handler for cell clicks
+  
+  useEffect(() => {
+
+    if (gameStarted && gameMode === 'vs-ai' && isAiTurn && !winner) {
+      dispatch({ type: 'SET_MESSAGE', payload: 'AI is thinking...' });
+      const aiDelay = Math.random() * 800 + 400; 
+      const timeoutId = setTimeout(() => {
+        const aiMoveIndex = getAiMove({
+          board,
+          currentPlayer, 
+          player1ActiveEmojis,
+          player2ActiveEmojis,
+        });
+
+        if (aiMoveIndex !== null) {
+          const aiEmojiCategory = player2Category; 
+          const emoji = getRandomEmoji(EMOJI_CATEGORIES[aiEmojiCategory]);
+
+          dispatch({
+            type: 'PLACE_EMOJI',
+            payload: {
+              index: aiMoveIndex,
+              emoji: emoji,
+              player: currentPlayer, 
+            },
+          });
+        } else {
+          console.warn("AI could not find a move, but game is not over.");
+          dispatch({ type: 'SET_MESSAGE', payload: 'AI paused.' });
+        }
+      }, aiDelay);
+
+      return () => clearTimeout(timeoutId); 
+    }
+  }, [
+    gameStarted,
+    gameMode,
+    isAiTurn,
+    winner,
+    currentPlayer, 
+    player1ActiveEmojis, 
+    player2ActiveEmojis, 
+    player2Category, 
+    board, 
+    dispatch 
+  ]);
+
   const handleCellClick = useCallback((index) => {
-    // Prevent placing if game not started, already won, or cell is already occupied
+    if (gameMode === 'vs-ai' && isAiTurn) {
+      dispatch({ type: 'SET_MESSAGE', payload: 'It\'s the AI\'s turn!' });
+      setTimeout(() => dispatch({ type: 'SET_MESSAGE', payload: null }), 1500);
+      return;
+    }
+
+    
     if (!gameStarted || winner || board[index]?.player) {
-      if (board[index]?.player) {
+      if (board[index]?.player) { 
         dispatch({ type: 'SET_MESSAGE', payload: 'This cell is already occupied!' });
-        setTimeout(() => dispatch({ type: 'SET_MESSAGE', payload: null }), 2000); // Clear message after 2 seconds
+        setTimeout(() => dispatch({ type: 'SET_MESSAGE', payload: null }), 2000);
       }
       return;
     }
@@ -71,18 +117,15 @@ function App() {
     const currentActiveEmojis = currentPlayer === 1 ? player1ActiveEmojis : player2ActiveEmojis;
     const oldestEmojiData = currentActiveEmojis.length === 3 ? currentActiveEmojis[0] : null;
 
-    // Vanishing Rule: Cannot place over where the oldest emoji was placed
     if (oldestEmojiData && index === oldestEmojiData.cellIndex) {
       dispatch({ type: 'SET_MESSAGE', payload: 'You cannot place your new emoji where your oldest emoji was!' });
-      setTimeout(() => dispatch({ type: 'SET_MESSAGE', payload: null }), 3000); // Clear message after 3 seconds
+      setTimeout(() => dispatch({ type: 'SET_MESSAGE', payload: null }), 3000);
       return;
     }
 
-    // Get a random emoji from the current player's selected category
+
     const emojiCategory = currentPlayer === 1 ? player1Category : player2Category;
     const emoji = getRandomEmoji(EMOJI_CATEGORIES[emojiCategory]);
-
-    // Dispatch action to place the emoji and update state
     dispatch({
       type: 'PLACE_EMOJI',
       payload: {
@@ -91,22 +134,26 @@ function App() {
         player: currentPlayer,
       },
     });
-  }, [gameStarted, winner, board, currentPlayer, player1ActiveEmojis, player2ActiveEmojis, player1Category, player2Category]);
+  }, [gameMode, isAiTurn, gameStarted, winner, board, currentPlayer, player1ActiveEmojis, player2ActiveEmojis, player1Category, player2Category, dispatch]);
 
-  // Handler to start the game after category selection
+
+  const handleSelectGameMode = useCallback((mode) => {
+    dispatch({ type: 'SET_GAME_MODE', payload: mode });
+  }, [dispatch]);
+
   const handleStartGame = useCallback((p1Cat, p2Cat) => {
     dispatch({ type: 'START_GAME', payload: { player1Category: p1Cat, player2Category: p2Cat } });
-  }, []);
+  }, [dispatch]);
 
-  // Handler to reset the game for a new round
+
   const handlePlayAgain = useCallback(() => {
     dispatch({ type: 'RESET_GAME' });
-  }, []);
+  }, [dispatch]);
 
-  // Handler to toggle the help modal visibility
+
   const toggleHelp = useCallback(() => {
     dispatch({ type: 'TOGGLE_HELP' });
-  }, []);
+  }, [dispatch]);
 
   return (
     <div className="font-inter min-h-screen bg-gradient-to-br from-indigo-100 via-purple-100 to-pink-100 flex flex-col items-center justify-center p-4">
@@ -114,14 +161,15 @@ function App() {
         Blink Tac Toe
       </h1>
 
-      {!gameStarted ? (
-        // Show pre-game setup if game hasn't started
+      {!gameMode ? ( 
+        <GameModeSelector onSelectMode={handleSelectGameMode} />
+      ) : !gameStarted ? ( 
         <PreGameSetup
           categories={Object.keys(EMOJI_CATEGORIES)}
           onStartGame={handleStartGame}
+          gameMode={gameMode} 
         />
       ) : (
-        // Show game board and info if game has started
         <>
           <GameInfo
             currentPlayer={currentPlayer}
@@ -143,12 +191,22 @@ function App() {
               emojiCategoryName={player1Category}
               emojisInPlayCount={player1ActiveEmojis.length}
             />
-            <PlayerPanel
-              player={2}
-              isCurrentPlayer={currentPlayer === 2}
-              emojiCategoryName={player2Category}
-              emojisInPlayCount={player2ActiveEmojis.length}
-            />
+            {gameMode === 'vs-ai' ? ( 
+              <PlayerPanel
+                player={2}
+                isCurrentPlayer={currentPlayer === 2}
+                emojiCategoryName={player2Category}
+                emojisInPlayCount={player2ActiveEmojis.length}
+                isAI={true} 
+              />
+            ) : ( 
+              <PlayerPanel
+                player={2}
+                isCurrentPlayer={currentPlayer === 2}
+                emojiCategoryName={player2Category}
+                emojisInPlayCount={player2ActiveEmojis.length}
+              />
+            )}
           </div>
         </>
       )}
@@ -159,6 +217,15 @@ function App() {
       >
         {showHelp ? 'Hide Rules' : 'Show Rules'}
       </button>
+      {gameMode && (
+         <button
+            className="mt-4 px-6 py-3 bg-gray-500 text-white font-bold rounded-full shadow-lg hover:bg-gray-600 transition-all duration-300 ease-in-out transform hover:scale-105"
+            onClick={() => dispatch({ type: 'SET_GAME_MODE', payload: null })}
+          >
+            Change Mode
+          </button>
+      )}
+
 
       {showHelp && <HelpModal onClose={toggleHelp} />}
     </div>
