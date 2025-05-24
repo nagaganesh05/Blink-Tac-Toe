@@ -217,16 +217,7 @@ function App() {
       >
         {showHelp ? 'Hide Rules' : 'Show Rules'}
       </button>
-      {gameMode && (
-         <button
-            className="mt-4 px-6 py-3 bg-gray-500 text-white font-bold rounded-full shadow-lg hover:bg-gray-600 transition-all duration-300 ease-in-out transform hover:scale-105"
-            onClick={() => dispatch({ type: 'SET_GAME_MODE', payload: null })}
-          >
-            Change Mode
-          </button>
-      )}
-
-
+      
       {showHelp && <HelpModal onClose={toggleHelp} />}
     </div>
   );
